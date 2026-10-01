@@ -1,6 +1,6 @@
 {
   "name": "pi-monitor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Pi tools that watch a file, a command or a directory in the background and notify the agent when something changes",
   "type": "module",
   "keywords": [

@@ -7,7 +7,7 @@
 // 管理器再按 minNotifyIntervalSec 把同一 monitor 的事件攒成一条通知。
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { closeSync, openSync, readSync, statSync, watch as fsWatch, type FSWatcher } from "node:fs";
+import { closeSync, openSync, readSync, statSync, watch as fsWatch, type FSWatcher, type Stats } from "node:fs";
 import type { MonitorConfig } from "./config.ts";
 import { cleanLine, cleanText, formatDuration, linesAfterCommonPrefix, truncate } from "./events.ts";
 
@@ -85,6 +85,7 @@ export class Monitor {
 	private pollKilledRun = false;
 	private offset = 0;
 	private tailIno?: number;
+	private tailSeen = false;
 	private carry = "";
 	private tailTimer?: NodeJS.Timeout;
 	private watchBuffer = new Map<string, string>();
@@ -155,9 +156,16 @@ export class Monitor {
 	private startTail(): void {
 		const path = this.spec.path;
 		if (!path) throw new Error("tail 需要 path");
-		const stat = statSync(path); // 文件不存在直接抛，由 start() 记成 error
-		this.offset = stat.size; // 从当前末尾开始，等价于 tail -f，不重放旧内容
-		this.tailIno = stat.ino;
+		let stat: Stats | undefined;
+		try {
+			stat = statSync(path);
+		} catch {
+			// 文件还没写出来（先起监视、日志稍后才出现）不是错误，等它出现即可
+			stat = undefined;
+		}
+		this.tailSeen = stat !== undefined;
+		this.offset = stat ? stat.size : 0; // 从当前末尾开始，等价于 tail -f，不重放旧内容
+		this.tailIno = stat?.ino;
 		this.tailTimer = setInterval(() => this.pollTail(), Math.max(100, Math.round(this.spec.intervalSec * 1000)));
 		this.tailTimer.unref?.();
 	}
@@ -165,17 +173,22 @@ export class Monitor {
 	private pollTail(): void {
 		const path = this.spec.path;
 		if (!path || this.stopped) return;
-		let size: number;
-		let ino: number;
+		let stat: Stats;
 		try {
-			const stat = statSync(path);
-			size = stat.size;
-			ino = stat.ino;
+			stat = statSync(path);
 		} catch {
+			if (!this.tailSeen) return; // 还没出现过，继续等
 			this.stop("error", `file was removed: ${path}`);
 			return;
 		}
-		if (this.tailIno !== undefined && ino !== this.tailIno) {
+		const size = stat.size;
+		const ino = stat.ino;
+		if (!this.tailSeen) {
+			// 监视期间才出现的文件：它的内容对我们都是新的，从头读
+			this.tailSeen = true;
+			this.tailIno = ino;
+			this.offset = 0;
+		} else if (this.tailIno !== undefined && ino !== this.tailIno) {
 			// 换了个文件（logrotate 常见）：新文件从头读，并说明一句
 			this.offset = 0;
 			this.carry = "";

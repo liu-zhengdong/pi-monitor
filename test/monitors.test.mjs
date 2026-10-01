@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -61,13 +61,26 @@ test("tail：pattern 只放行匹配的行", async () => {
 	manager.shutdown();
 });
 
-test("tail：文件不存在时启动就报错", () => {
+test("tail：文件还不存在时先等它出现，出现后从头读", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-monitor-"));
+	const file = join(dir, "later.log");
+	const { manager, lines } = harness();
+	const monitor = manager.start({ source: "tail", path: file, intervalSec: 0.05, timeoutSec: 5 });
+	assert.equal(monitor.running, true); // 日志还没写出来不是错误
+	await sleep(150);
+	writeFileSync(file, "ERROR: born\n");
+	await waitFor(() => monitor.eventCount === 1, "文件出现后的首行", 4000, () => JSON.stringify(manager.list()[0]));
+	manager.flush();
+	assert.deepEqual(lines(), ["ERROR: born"]);
+	manager.shutdown();
+});
+
+test("tail：出现过的文件被删掉报错", async () => {
+	const { file } = tempFile("gone.log", "");
 	const { manager } = harness();
-	const monitor = manager.start({ source: "tail", path: join(tmpdir(), "pi-monitor-nope", "x.log"), intervalSec: 0.05, timeoutSec: 5 });
-	assert.equal(monitor.running, false);
-	assert.equal(monitor.stopReason, "error");
-	// 启动失败的错误由工具同步返回，不该再发通知
-	assert.equal(manager.takePending(monitor.id).notice, undefined);
+	const monitor = manager.start({ source: "tail", path: file, intervalSec: 0.05, timeoutSec: 5 });
+	rmSync(file);
+	await waitFor(() => monitor.stopReason === "error", "文件消失后报错");
 	manager.shutdown();
 });
 

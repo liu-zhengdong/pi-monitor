@@ -12,7 +12,7 @@ monitor(source=watch, path=src, pattern="\\.ts$")                  # 源码目�
 
 | source  | 盯什么 | 默认检查间隔 |
 | ------- | ------ | ------------ |
-| `tail`  | 一个文件的新增行（从当前末尾开始，等价于 `tail -f`，不重放旧内容） | 1s |
+| `tail`  | 一个文件的新增行（从当前末尾开始，等价于 `tail -f`，不重放旧内容；文件还没出现就先等它） | 1s |
 | `poll`  | 每隔 `interval_sec` 跑一次命令，输出有增量时报告 | 5s |
 | `watch` | 一个目录（递归）里的文件增删改 | 1s |
 
@@ -59,14 +59,14 @@ Agent 正在跑（回合未完）时通知不打断它，等这一回合结束�
 ## 实现上的几个取舍
 
 - **`tail` 自己按间隔轮询 stat，不用 `fs.watchFile`**：后者的第一次 stat 是在线程池里异步做的，文件若在注册之后、那次 stat 之前又长了一截，它会把这截当成基线，之后再不为它回调，那段内容就永远漏了。自己 stat 则一直从启动那一刻的 size 往前读。
-- 文件被替换（`logrotate` 常见）会从头读新文件并说明一句；被截断（`copytruncate`）则回到开头继续跟。
+- 文件被替换（`logrotate` 常见）会从头读新文件并说明一句；被截断（`copytruncate`）则回到开头继续跟；删掉则报错停下。`tail` 只在文件一直没出现时默默等——先起监视、日志稍后写出来是常见用法，不算错。
 - `watch` 启动后 300ms 内的变动不报：macOS 的 FSEvents 会把注册前刚发生的事件补报一遍。
 - 单次读取上限 1MB、`poll` 单次命令输出上限 256KB、单次命令最多跑 120s（超了就杀进程组，不拖住下一轮）。
 
 ## 安装
 
 ```bash
-pi install git:github.com/liu-zhengdong/pi-monitor@v0.1.0
+pi install git:github.com/liu-zhengdong/pi-monitor@v0.1.1
 ```
 
 ## 开发
